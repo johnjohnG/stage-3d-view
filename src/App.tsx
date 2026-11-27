@@ -20,6 +20,7 @@ import {
 } from './utils/imperial';
 
 const STORAGE_KEY = 'stagewire3d_document_v3';
+const DEFAULT_STAGE_NAME = 'StageWire 3D';
 
 const DEFAULT_DIMENSIONS: StageDimensions = {
   main: {
@@ -118,6 +119,10 @@ function loadSavedDocument(): StagePlannerDocument {
       if (parsed && parsed.version === 3 && parsed.dimensions?.main && parsed.dimensions?.riser) {
         return {
           version: 3,
+          stageName:
+            typeof parsed.stageName === 'string' && parsed.stageName.trim()
+              ? parsed.stageName.trim()
+              : DEFAULT_STAGE_NAME,
           dimensions: parsed.dimensions,
           wires: Array.isArray(parsed.wires) ? parsed.wires : [],
           measures: Array.isArray(parsed.measures) ? parsed.measures : [],
@@ -130,6 +135,7 @@ function loadSavedDocument(): StagePlannerDocument {
   }
   return {
     version: 3,
+    stageName: DEFAULT_STAGE_NAME,
     dimensions: DEFAULT_DIMENSIONS,
     wires: createSampleWires(),
     measures: createSampleMeasures(),
@@ -140,6 +146,7 @@ function loadSavedDocument(): StagePlannerDocument {
 export default function App() {
   const [initialDoc] = useState<StagePlannerDocument>(() => loadSavedDocument());
 
+  const [stageName, setStageName] = useState<string>(initialDoc.stageName || DEFAULT_STAGE_NAME);
   const [dimensions, setDimensions] = useState<StageDimensions>(initialDoc.dimensions);
   const [wires, setWires] = useState<WireRun[]>(initialDoc.wires);
   const [measures, setMeasures] = useState<DimensionLine[]>(initialDoc.measures);
@@ -167,6 +174,7 @@ export default function App() {
     try {
       const doc: StagePlannerDocument = {
         version: 3,
+        stageName: stageName.trim() || DEFAULT_STAGE_NAME,
         dimensions,
         wires,
         measures,
@@ -176,7 +184,7 @@ export default function App() {
     } catch {
       // Ignore storage quota errors
     }
-  }, [dimensions, wires, measures, markers]);
+  }, [stageName, dimensions, wires, measures, markers]);
 
   const showTransientNotice = useCallback((msg: string) => {
     setNotice(msg);
@@ -348,22 +356,30 @@ export default function App() {
   }, []);
 
   const handleExportJson = useCallback(() => {
+    const cleanName = stageName.trim() || DEFAULT_STAGE_NAME;
     const doc: StagePlannerDocument = {
       version: 3,
+      stageName: cleanName,
       dimensions,
       wires,
       measures,
       markers,
     };
+    const slug =
+      cleanName
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '') || 'stage-wire-plan';
+    const fileName = `${slug}.json`;
     const blob = new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'stage-wire-plan.json';
+    a.download = fileName;
     a.click();
     URL.revokeObjectURL(url);
-    showTransientNotice('Exported stage-wire-plan.json');
-  }, [dimensions, wires, measures, markers, showTransientNotice]);
+    showTransientNotice(`Exported ${fileName}`);
+  }, [stageName, dimensions, wires, measures, markers, showTransientNotice]);
 
   const handleImportJson = useCallback(
     (file: File) => {
@@ -375,6 +391,11 @@ export default function App() {
             showTransientNotice('Invalid stage plan file.');
             return;
           }
+          setStageName(
+            typeof parsed.stageName === 'string' && parsed.stageName.trim()
+              ? parsed.stageName.trim()
+              : DEFAULT_STAGE_NAME,
+          );
           setDimensions({
             main: parsed.dimensions.main,
             riser: {
@@ -410,6 +431,7 @@ export default function App() {
   }, [showTransientNotice]);
 
   const handleResetSample = useCallback(() => {
+    setStageName(DEFAULT_STAGE_NAME);
     setDimensions(DEFAULT_DIMENSIONS);
     setWires(createSampleWires());
     setMeasures(createSampleMeasures());
@@ -461,6 +483,7 @@ export default function App() {
       </div>
 
       <ControlDock
+        stageName={stageName}
         dimensions={dimensions}
         wires={wires}
         measures={measures}
@@ -476,6 +499,7 @@ export default function App() {
         draftPoints={draftPoints}
         measureStart={measureStart}
         circleStart={circleStart}
+        onUpdateStageName={setStageName}
         onUpdateDimensions={setDimensions}
         onSetToolMode={handleSetToolMode}
         onSetSnapMode={setSnapMode}

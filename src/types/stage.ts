@@ -68,6 +68,7 @@ export interface HoverPreviewState {
 
 export interface StagePlannerDocument {
   version: 3;
+  stageName?: string;
   dimensions: StageDimensions;
   wires: WireRun[];
   measures: DimensionLine[];

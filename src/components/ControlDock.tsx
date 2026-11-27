@@ -11,6 +11,7 @@ import {
   EyeOff,
   Grid,
   MousePointer,
+  Pencil,
   RotateCcw,
   Ruler,
   SlidersHorizontal,
@@ -36,6 +37,7 @@ import { ImperialInput } from './ImperialInput';
 type PanelTab = 'dimensions' | 'lines' | 'camera';
 
 interface ControlDockProps {
+  stageName: string;
   dimensions: StageDimensions;
   wires: WireRun[];
   measures: DimensionLine[];
@@ -51,6 +53,7 @@ interface ControlDockProps {
   draftPoints: Vec3Tuple[];
   measureStart: Vec3Tuple | null;
   circleStart: Vec3Tuple | null;
+  onUpdateStageName: (name: string) => void;
   onUpdateDimensions: (next: StageDimensions) => void;
   onSetToolMode: (mode: ToolMode) => void;
   onSetSnapMode: (mode: SnapMode) => void;
@@ -77,6 +80,7 @@ interface ControlDockProps {
 }
 
 export const ControlDock: React.FC<ControlDockProps> = ({
+  stageName,
   dimensions,
   wires,
   measures,
@@ -92,6 +96,7 @@ export const ControlDock: React.FC<ControlDockProps> = ({
   draftPoints,
   measureStart,
   circleStart,
+  onUpdateStageName,
   onUpdateDimensions,
   onSetToolMode,
   onSetSnapMode,
@@ -118,7 +123,30 @@ export const ControlDock: React.FC<ControlDockProps> = ({
 }) => {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [activeTab, setActiveTab] = useState<PanelTab>('dimensions');
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(stageName);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const titleInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (!isEditingTitle) {
+      setTitleDraft(stageName);
+    }
+  }, [stageName, isEditingTitle]);
+
+  useEffect(() => {
+    if (isEditingTitle) {
+      titleInputRef.current?.focus();
+      titleInputRef.current?.select();
+    }
+  }, [isEditingTitle]);
+
+  const commitTitleEdit = () => {
+    const trimmed = titleDraft.trim() || 'StageWire 3D';
+    onUpdateStageName(trimmed);
+    setTitleDraft(trimmed);
+    setIsEditingTitle(false);
+  };
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -151,7 +179,38 @@ export const ControlDock: React.FC<ControlDockProps> = ({
     <>
       {/* Minimal Top-Left Header */}
       <header className="pointer-events-none fixed top-4 left-5 z-20 flex flex-col gap-0.5">
-        <h1 className="text-base font-semibold tracking-tight text-slate-100">StageWire 3D</h1>
+        <div className="pointer-events-auto flex items-center gap-1.5">
+          {isEditingTitle ? (
+            <input
+              ref={titleInputRef}
+              type="text"
+              value={titleDraft}
+              onChange={(e) => setTitleDraft(e.target.value)}
+              onBlur={commitTitleEdit}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  commitTitleEdit();
+                } else if (e.key === 'Escape') {
+                  setTitleDraft(stageName);
+                  setIsEditingTitle(false);
+                }
+              }}
+              maxLength={48}
+              aria-label="Stage name"
+              className="select-text rounded border border-sky-400/80 bg-[#0b0f14] px-2 py-0.5 text-base font-semibold tracking-tight text-slate-100 outline-none"
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={() => setIsEditingTitle(true)}
+              title="Click to rename stage"
+              className="group flex items-center gap-1.5 rounded px-1 -ml-1 py-0.5 text-left hover:bg-slate-800/60 transition-colors cursor-pointer"
+            >
+              <h1 className="text-base font-semibold tracking-tight text-slate-100">{stageName}</h1>
+              <Pencil className="h-3.5 w-3.5 text-slate-400 opacity-60 group-hover:opacity-100 group-hover:text-sky-300 transition-opacity" />
+            </button>
+          )}
+        </div>
         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400 font-mono-tabular">
           <span>
             {formatFeetInches(dimensions.main.widthFt)} × {formatFeetInches(dimensions.main.depthFt)} Stage
@@ -424,6 +483,26 @@ export const ControlDock: React.FC<ControlDockProps> = ({
           <div className="dock-scroll flex-1 overflow-y-auto p-4">
             {activeTab === 'dimensions' && (
               <div className="flex flex-col gap-5">
+                {/* Stage Name */}
+                <section className="flex flex-col gap-1.5">
+                  <label htmlFor="stage-name-input" className="text-[11px] font-medium text-slate-400">
+                    Stage Name
+                  </label>
+                  <input
+                    id="stage-name-input"
+                    type="text"
+                    value={stageName}
+                    onChange={(e) => onUpdateStageName(e.target.value)}
+                    onBlur={(e) => {
+                      const clean = e.target.value.trim() || 'StageWire 3D';
+                      if (clean !== stageName) onUpdateStageName(clean);
+                    }}
+                    placeholder="StageWire 3D"
+                    maxLength={48}
+                    className="select-text w-full rounded-md border border-slate-700/80 bg-[#0c1016] px-2.5 py-1.5 text-xs font-medium text-slate-100 outline-none focus:border-sky-400"
+                  />
+                </section>
+
                 {/* Main Stage Footprint & Height */}
                 <section className="flex flex-col gap-3">
                   <div className="flex items-center justify-between">
