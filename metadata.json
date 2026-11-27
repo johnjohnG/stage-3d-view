@@ -1,0 +1,6 @@
+{
+  "name": "StageWire 3D",
+  "description": "Interactive 3D stage modeler, Imperial measurement tool, and cable routing planner.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
