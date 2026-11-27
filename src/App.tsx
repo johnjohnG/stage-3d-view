@@ -153,6 +153,7 @@ export default function App() {
   const [showFloorGrid, setShowFloorGrid] = useState<boolean>(true);
 
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const [defaultMarkerHeightFt, setDefaultMarkerHeightFt] = useState<number>(0);
   const [draftPoints, setDraftPoints] = useState<Vec3Tuple[]>([]);
   const [measureStart, setMeasureStart] = useState<Vec3Tuple | null>(null);
   const [circleStart, setCircleStart] = useState<Vec3Tuple | null>(null);
@@ -264,13 +265,14 @@ export default function App() {
           color: activeColor,
           center,
           radiusFt,
+          ...(defaultMarkerHeightFt > 0.02 ? { heightFt: defaultMarkerHeightFt } : {}),
           visible: true,
         },
       ]);
       setCircleStart(null);
       setSelectedItemId(id);
     },
-    [activeColor],
+    [activeColor, defaultMarkerHeightFt],
   );
 
   // Keyboard shortcuts for drawing & quick tool switching
@@ -334,6 +336,10 @@ export default function App() {
 
   const handleUpdateMarker = useCallback((id: string, patch: Partial<StageMarker>) => {
     setMarkers((cur) => cur.map((mk) => (mk.id === id ? { ...mk, ...patch } : mk)));
+  }, []);
+
+  const handleUpdateMarkerCenter = useCallback((id: string, center: Vec3Tuple) => {
+    setMarkers((cur) => cur.map((mk) => (mk.id === id ? { ...mk, center } : mk)));
   }, []);
 
   const handleDeleteMarker = useCallback((id: string) => {
@@ -431,6 +437,7 @@ export default function App() {
           showStageDims={showStageDims}
           showFloorGrid={showFloorGrid}
           selectedItemId={selectedItemId}
+          defaultMarkerHeightFt={defaultMarkerHeightFt}
           draftPoints={draftPoints}
           measureStart={measureStart}
           circleStart={circleStart}
@@ -443,6 +450,7 @@ export default function App() {
           onCommitCircle={handleCommitCircle}
           onSelectItem={setSelectedItemId}
           onUpdateWirePoints={handleUpdateWirePoints}
+          onUpdateMarkerCenter={handleUpdateMarkerCenter}
         />
 
         {notice && (
@@ -464,6 +472,7 @@ export default function App() {
         showStageDims={showStageDims}
         showFloorGrid={showFloorGrid}
         selectedItemId={selectedItemId}
+        defaultMarkerHeightFt={defaultMarkerHeightFt}
         draftPoints={draftPoints}
         measureStart={measureStart}
         circleStart={circleStart}
@@ -471,6 +480,7 @@ export default function App() {
         onSetToolMode={handleSetToolMode}
         onSetSnapMode={setSnapMode}
         onSetActiveColor={setActiveColor}
+        onSetDefaultMarkerHeightFt={setDefaultMarkerHeightFt}
         onSetViewMode={setViewMode}
         onToggleStageDims={() => setShowStageDims((v) => !v)}
         onToggleFloorGrid={() => setShowFloorGrid((v) => !v)}

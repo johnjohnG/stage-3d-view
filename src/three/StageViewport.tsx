@@ -42,6 +42,7 @@ interface StageViewportProps {
   showStageDims: boolean;
   showFloorGrid: boolean;
   selectedItemId: string | null;
+  defaultMarkerHeightFt: number;
   draftPoints: Vec3Tuple[];
   measureStart: Vec3Tuple | null;
   circleStart: Vec3Tuple | null;
@@ -54,6 +55,7 @@ interface StageViewportProps {
   onCommitCircle: (center: Vec3Tuple, radiusFt: number) => void;
   onSelectItem: (id: string | null) => void;
   onUpdateWirePoints: (id: string, points: Vec3Tuple[]) => void;
+  onUpdateMarkerCenter: (id: string, center: Vec3Tuple) => void;
 }
 
 interface LabelDescriptor {
@@ -107,6 +109,7 @@ export const StageViewport: React.FC<StageViewportProps> = ({
   showStageDims,
   showFloorGrid,
   selectedItemId,
+  defaultMarkerHeightFt,
   draftPoints,
   measureStart,
   circleStart,
@@ -119,6 +122,7 @@ export const StageViewport: React.FC<StageViewportProps> = ({
   onCommitCircle,
   onSelectItem,
   onUpdateWirePoints,
+  onUpdateMarkerCenter,
 }) => {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const labelContainerRef = useRef<HTMLDivElement | null>(null);
@@ -140,6 +144,7 @@ export const StageViewport: React.FC<StageViewportProps> = ({
     showStageDims,
     showFloorGrid,
     selectedItemId,
+    defaultMarkerHeightFt,
     draftPoints,
     measureStart,
     circleStart,
@@ -151,6 +156,7 @@ export const StageViewport: React.FC<StageViewportProps> = ({
     onCommitCircle,
     onSelectItem,
     onUpdateWirePoints,
+    onUpdateMarkerCenter,
   });
   propsRef.current = {
     dimensions,
@@ -164,6 +170,7 @@ export const StageViewport: React.FC<StageViewportProps> = ({
     showStageDims,
     showFloorGrid,
     selectedItemId,
+    defaultMarkerHeightFt,
     draftPoints,
     measureStart,
     circleStart,
@@ -175,6 +182,7 @@ export const StageViewport: React.FC<StageViewportProps> = ({
     onCommitCircle,
     onSelectItem,
     onUpdateWirePoints,
+    onUpdateMarkerCenter,
   };
 
   // Internal imperative Three.js handles exposed to reactive effect hooks
@@ -365,13 +373,13 @@ export const StageViewport: React.FC<StageViewportProps> = ({
     // Raycast & Label state
     const stageRaycastTargets: THREE.Object3D[] = [];
     const clickableLineObjects: THREE.Object3D[] = [];
-    const selectedWireMeshes: THREE.Object3D[] = [];
+    const selectedDragMeshes: THREE.Object3D[] = [];
     let snapData: StageSnapData = extractStageSnapData(propsRef.current.dimensions);
     let labelDescriptors: LabelDescriptor[] = [];
     let hoverState: HoverPreviewState | null = null;
     let lastPointerPx: { x: number; y: number } | null = null;
 
-    type WireDragState =
+    type DragState =
       | {
           kind: 'wire';
           wireId: string;
@@ -385,8 +393,18 @@ export const StageViewport: React.FC<StageViewportProps> = ({
           vertexIndex: number;
           originalPoints: Vec3Tuple[];
           latestPoints: Vec3Tuple[];
+        }
+      | {
+          kind: 'marker';
+          markerId: string;
+          startPoint: Vec3Tuple;
+          originalCenter: Vec3Tuple;
+          latestCenter: Vec3Tuple;
+          snapCenterDirectly: boolean;
+          radiusFt: number;
+          heightFt: number;
         };
-    let dragState: WireDragState | null = null;
+    let dragState: DragState | null = null;
     let orbitHoverCursor: 'grab' | 'pointer' | 'move' | 'grabbing' = 'grab';
 
     // Smooth camera transition state
@@ -487,7 +505,7 @@ export const StageViewport: React.FC<StageViewportProps> = ({
         }
       }
 
-      // Live cursor badge when drawing/measuring/marking or moving a wire
+      // Live cursor badge when drawing/measuring/marking or moving a wire/marker
       const badge = cursorBadgeRef.current;
       if (badge) {
         const mode = propsRef.current.toolMode;
@@ -500,9 +518,18 @@ export const StageViewport: React.FC<StageViewportProps> = ({
                 : hoverState.snapKind === 'grid'
                   ? '6" Grid'
                   : 'Surface';
-          const len = calculatePolylineFeet(dragState.latestPoints);
-          const actionLabel = dragState.kind === 'vertex' ? 'Move Joint' : 'Move Wire';
-          badge.textContent = `${actionLabel} (${snapLabel}) · Total ${formatFeetInches(len)}`;
+          if (dragState.kind === 'marker') {
+            const shapeLabel = dragState.heightFt > 0.02 ? 'Cylinder' : 'Circle';
+            const sizeLabel =
+              dragState.heightFt > 0.02
+                ? `Ø ${formatFeetInches(dragState.radiusFt * 2)} × H ${formatFeetInches(dragState.heightFt)}`
+                : `Ø ${formatFeetInches(dragState.radiusFt * 2)}`;
+            badge.textContent = `Move ${shapeLabel} (${snapLabel}) · ${sizeLabel}`;
+          } else {
+            const len = calculatePolylineFeet(dragState.latestPoints);
+            const actionLabel = dragState.kind === 'vertex' ? 'Move Joint' : 'Move Wire';
+            badge.textContent = `${actionLabel} (${snapLabel}) · Total ${formatFeetInches(len)}`;
+          }
           badge.style.opacity = '1';
           badge.style.transform = `translate3d(${(lastPointerPx.x + 14).toFixed(0)}px, ${(lastPointerPx.y - 28).toFixed(0)}px, 0)`;
         } else if ((mode === 'wire' || mode === 'measure' || mode === 'circle') && hoverState && lastPointerPx) {
@@ -657,7 +684,7 @@ export const StageViewport: React.FC<StageViewportProps> = ({
       disposeGroupResources(measuresGroup, textures);
       disposeGroupResources(markersGroup, textures);
       clickableLineObjects.length = 0;
-      selectedWireMeshes.length = 0;
+      selectedDragMeshes.length = 0;
 
       const {
         wires: allWires,
@@ -689,11 +716,12 @@ export const StageViewport: React.FC<StageViewportProps> = ({
           jointMesh.position.set(p[0], p[1] + 0.035, p[2]);
           jointMesh.castShadow = true;
           jointMesh.userData.itemId = wire.id;
+          jointMesh.userData.itemKind = 'wire';
           jointMesh.userData.wireVertexIndex = i;
           wiresGroup.add(jointMesh);
           clickableLineObjects.push(jointMesh);
           if (isSelected) {
-            selectedWireMeshes.push(jointMesh);
+            selectedDragMeshes.push(jointMesh);
 
             // Visual grab ring around each joint when selected
             const haloGeo = new THREE.RingGeometry(jointRadius * 1.55, jointRadius * 2.25, 20);
@@ -709,10 +737,11 @@ export const StageViewport: React.FC<StageViewportProps> = ({
             haloMesh.position.set(p[0], p[1] + 0.04, p[2]);
             haloMesh.renderOrder = 12;
             haloMesh.userData.itemId = wire.id;
+            haloMesh.userData.itemKind = 'wire';
             haloMesh.userData.wireVertexIndex = i;
             wiresGroup.add(haloMesh);
             clickableLineObjects.push(haloMesh);
-            selectedWireMeshes.push(haloMesh);
+            selectedDragMeshes.push(haloMesh);
           }
 
           if (i > 0) {
@@ -723,11 +752,12 @@ export const StageViewport: React.FC<StageViewportProps> = ({
             if (seg) {
               seg.castShadow = true;
               seg.userData.itemId = wire.id;
+              seg.userData.itemKind = 'wire';
               seg.userData.wireSegmentIndex = i - 1;
               wiresGroup.add(seg);
               clickableLineObjects.push(seg);
               if (isSelected) {
-                selectedWireMeshes.push(seg);
+                selectedDragMeshes.push(seg);
               }
             }
           }
@@ -787,13 +817,28 @@ export const StageViewport: React.FC<StageViewportProps> = ({
         }
       }
 
-      // 3. Render Stage Circle Markers (Singers / Instruments)
+      // 3. Render Stage Circle / Cylinder Markers (Singers / Instruments)
       for (const mk of allMarkers) {
         if (!mk.visible || mk.radiusFt <= 0.05) continue;
         const isSelected = selId === mk.id;
+        const heightFt = mk.heightFt ?? 0;
+        const isCylinder = heightFt > 0.02;
         const markerY = mk.center[1] + 0.025;
 
-        // Translucent inner zone disc
+        const registerMarkerMesh = (mesh: THREE.Object3D, isCenterHandle = false) => {
+          mesh.userData.itemId = mk.id;
+          mesh.userData.itemKind = 'marker';
+          if (isCenterHandle) {
+            mesh.userData.markerCenterHandle = true;
+          }
+          markersGroup.add(mesh);
+          clickableLineObjects.push(mesh);
+          if (isSelected) {
+            selectedDragMeshes.push(mesh);
+          }
+        };
+
+        // Translucent base zone disc
         const fillGeo = new THREE.CircleGeometry(mk.radiusFt, 48);
         fillGeo.rotateX(-Math.PI / 2);
         const fillMat = new THREE.MeshBasicMaterial({
@@ -808,16 +853,14 @@ export const StageViewport: React.FC<StageViewportProps> = ({
         });
         const fillMesh = new THREE.Mesh(fillGeo, fillMat);
         fillMesh.position.set(mk.center[0], markerY, mk.center[2]);
-        fillMesh.userData.itemId = mk.id;
-        markersGroup.add(fillMesh);
-        clickableLineObjects.push(fillMesh);
+        registerMarkerMesh(fillMesh);
 
-        // Crisp outer ring
+        // Crisp base outer ring
         const innerR = Math.max(0.05, mk.radiusFt - (isSelected ? 0.12 : 0.08));
         const ringGeo = new THREE.RingGeometry(innerR, mk.radiusFt, 48);
         ringGeo.rotateX(-Math.PI / 2);
         const ringMat = new THREE.MeshBasicMaterial({
-          color: mk.color,
+          color: isSelected && isCylinder ? 0xf8fafc : mk.color,
           side: THREE.DoubleSide,
           polygonOffset: true,
           polygonOffsetFactor: -2,
@@ -825,18 +868,64 @@ export const StageViewport: React.FC<StageViewportProps> = ({
         });
         const ringMesh = new THREE.Mesh(ringGeo, ringMat);
         ringMesh.position.set(mk.center[0], markerY + 0.004, mk.center[2]);
-        ringMesh.userData.itemId = mk.id;
-        markersGroup.add(ringMesh);
-        clickableLineObjects.push(ringMesh);
+        registerMarkerMesh(ringMesh);
 
-        // Center pin
-        const pinGeo = new THREE.CylinderGeometry(0.07, 0.07, 0.05, 14);
+        // Optional 3D Cylinder extrusion when heightFt > 0
+        if (isCylinder) {
+          const cylGeo = new THREE.CylinderGeometry(mk.radiusFt, mk.radiusFt, heightFt, 48, 1, false);
+          const cylMat = new THREE.MeshStandardMaterial({
+            color: mk.color,
+            emissive: mk.color,
+            emissiveIntensity: isSelected ? 0.28 : 0.1,
+            transparent: true,
+            opacity: isSelected ? 0.5 : 0.34,
+            roughness: 0.45,
+            metalness: 0.1,
+            depthWrite: false,
+            side: THREE.DoubleSide,
+          });
+          const cylMesh = new THREE.Mesh(cylGeo, cylMat);
+          cylMesh.position.set(mk.center[0], mk.center[1] + heightFt / 2, mk.center[2]);
+          cylMesh.castShadow = true;
+          cylMesh.receiveShadow = true;
+          registerMarkerMesh(cylMesh);
+
+          // Crisp top perimeter ring
+          const topRingGeo = new THREE.RingGeometry(innerR, mk.radiusFt, 48);
+          topRingGeo.rotateX(-Math.PI / 2);
+          const topRingMat = new THREE.MeshBasicMaterial({
+            color: isSelected ? 0xf8fafc : mk.color,
+            side: THREE.DoubleSide,
+          });
+          const topRingMesh = new THREE.Mesh(topRingGeo, topRingMat);
+          topRingMesh.position.set(mk.center[0], mk.center[1] + heightFt + 0.005, mk.center[2]);
+          registerMarkerMesh(topRingMesh);
+        }
+
+        // Center pin (placed on top if cylinder, or on deck if flat circle)
+        const pinY = isCylinder ? mk.center[1] + heightFt + 0.025 : markerY + 0.025;
+        const pinGeo = new THREE.CylinderGeometry(0.08, 0.08, 0.05, 14);
         const pinMat = new THREE.MeshBasicMaterial({ color: mk.color });
         const pinMesh = new THREE.Mesh(pinGeo, pinMat);
-        pinMesh.position.set(mk.center[0], markerY + 0.025, mk.center[2]);
-        pinMesh.userData.itemId = mk.id;
-        markersGroup.add(pinMesh);
-        clickableLineObjects.push(pinMesh);
+        pinMesh.position.set(mk.center[0], pinY, mk.center[2]);
+        registerMarkerMesh(pinMesh, true);
+
+        // Selected center snap-handle halo ring
+        if (isSelected) {
+          const centerHaloGeo = new THREE.RingGeometry(0.14, 0.22, 24);
+          centerHaloGeo.rotateX(-Math.PI / 2);
+          const centerHaloMat = new THREE.MeshBasicMaterial({
+            color: 0xf8fafc,
+            side: THREE.DoubleSide,
+            transparent: true,
+            opacity: 0.92,
+            depthTest: false,
+          });
+          const centerHalo = new THREE.Mesh(centerHaloGeo, centerHaloMat);
+          centerHalo.position.set(mk.center[0], pinY + 0.015, mk.center[2]);
+          centerHalo.renderOrder = 12;
+          registerMarkerMesh(centerHalo, true);
+        }
       }
 
       rebuildLabelDescriptors();
@@ -895,16 +984,20 @@ export const StageViewport: React.FC<StageViewportProps> = ({
         });
       }
 
-      // Stage circle marker labels
+      // Stage circle / cylinder marker labels
       for (const mk of allMarkers) {
         if (!mk.visible) continue;
         const name = mk.label.trim() || 'Marker';
+        const heightFt = mk.heightFt ?? 0;
+        const isCylinder = heightFt > 0.02;
         next.push({
           id: `lbl-marker-${mk.id}`,
           kind: 'marker',
-          text: `${name} · Ø ${formatFeetInches(mk.radiusFt * 2)}`,
+          text: isCylinder
+            ? `${name} · Ø ${formatFeetInches(mk.radiusFt * 2)} × H ${formatFeetInches(heightFt)}`
+            : `${name} · Ø ${formatFeetInches(mk.radiusFt * 2)}`,
           color: mk.color,
-          worldPos: new THREE.Vector3(mk.center[0], mk.center[1] + 0.26, mk.center[2]),
+          worldPos: new THREE.Vector3(mk.center[0], mk.center[1] + heightFt + 0.26, mk.center[2]),
         });
       }
 
@@ -1011,6 +1104,27 @@ export const StageViewport: React.FC<StageViewportProps> = ({
             ringMesh.position.set(cStart[0], cStart[1] + 0.03, cStart[2]);
             previewGroup.add(ringMesh);
 
+            const previewH = propsRef.current.defaultMarkerHeightFt;
+            if (previewH > 0.02) {
+              const cylGeo = new THREE.CylinderGeometry(r, r, previewH, 48, 1, false);
+              const cylMat = new THREE.MeshBasicMaterial({
+                color,
+                transparent: true,
+                opacity: 0.22,
+                depthWrite: false,
+                side: THREE.DoubleSide,
+              });
+              const cylMesh = new THREE.Mesh(cylGeo, cylMat);
+              cylMesh.position.set(cStart[0], cStart[1] + previewH / 2, cStart[2]);
+              previewGroup.add(cylMesh);
+
+              const topRingGeo = new THREE.RingGeometry(Math.max(0.04, r - 0.08), r, 48);
+              topRingGeo.rotateX(-Math.PI / 2);
+              const topRingMesh = new THREE.Mesh(topRingGeo, rubberMat);
+              topRingMesh.position.set(cStart[0], cStart[1] + previewH + 0.005, cStart[2]);
+              previewGroup.add(topRingMesh);
+            }
+
             _vA.set(cStart[0], cStart[1] + 0.035, cStart[2]);
             _vB.set(hoverState.point[0], cStart[1] + 0.035, hoverState.point[2]);
             const radLine = createSegmentCylinder(_vA, _vB, 0.02, rubberMat);
@@ -1081,7 +1195,7 @@ export const StageViewport: React.FC<StageViewportProps> = ({
     function computeSnapPoint(
       clientX: number,
       clientY: number,
-      ignoreWireId?: string,
+      ignoreItemId?: string,
       fallbackY?: number,
     ): HoverPreviewState | null {
       const rect = renderer.domElement.getBoundingClientRect();
@@ -1127,7 +1241,7 @@ export const StageViewport: React.FC<StageViewportProps> = ({
           }
         }
         for (const w of propsRef.current.wires) {
-          if (!w.visible || (ignoreWireId && w.id === ignoreWireId)) continue;
+          if (!w.visible || (ignoreItemId && w.id === ignoreItemId)) continue;
           for (const wp of w.points) {
             _vA.set(wp[0], wp[1], wp[2]);
             const d = rawPt.distanceTo(_vA);
@@ -1146,7 +1260,7 @@ export const StageViewport: React.FC<StageViewportProps> = ({
           }
         }
         for (const mk of propsRef.current.markers) {
-          if (!mk.visible) continue;
+          if (!mk.visible || (ignoreItemId && mk.id === ignoreItemId)) continue;
           _vA.set(mk.center[0], mk.center[1], mk.center[2]);
           const d = rawPt.distanceTo(_vA);
           if (d < bestCornerDist) {
@@ -1219,7 +1333,10 @@ export const StageViewport: React.FC<StageViewportProps> = ({
       };
     }
 
-    function computeMovedPoints(state: WireDragState, snap: HoverPreviewState): Vec3Tuple[] {
+    function computeMovedPoints(
+      state: Extract<DragState, { kind: 'wire' | 'vertex' }>,
+      snap: HoverPreviewState,
+    ): Vec3Tuple[] {
       if (state.kind === 'vertex') {
         return state.originalPoints.map((pt, idx) => (idx === state.vertexIndex ? snap.point : pt));
       }
@@ -1233,18 +1350,37 @@ export const StageViewport: React.FC<StageViewportProps> = ({
       ]);
     }
 
+    function computeMovedMarkerCenter(
+      state: Extract<DragState, { kind: 'marker' }>,
+      snap: HoverPreviewState,
+    ): Vec3Tuple {
+      if (state.snapCenterDirectly) {
+        return snap.point;
+      }
+      const dx = snap.point[0] - state.startPoint[0];
+      const dz = snap.point[2] - state.startPoint[2];
+      return [
+        Math.round((state.originalCenter[0] + dx) * 100) / 100,
+        snap.point[1],
+        Math.round((state.originalCenter[2] + dz) * 100) / 100,
+      ];
+    }
+
     function syncCursorStyle() {
       const mode = propsRef.current.toolMode;
       if (mode === 'wire' || mode === 'measure' || mode === 'circle') {
         renderer.domElement.style.cursor = 'crosshair';
       } else if (dragState) {
-        renderer.domElement.style.cursor = dragState.kind === 'vertex' ? 'grabbing' : 'move';
+        renderer.domElement.style.cursor =
+          dragState.kind === 'vertex' || (dragState.kind === 'marker' && dragState.snapCenterDirectly)
+            ? 'grabbing'
+            : 'move';
       } else {
         renderer.domElement.style.cursor = orbitHoverCursor;
       }
     }
 
-    // Pointer interaction: cleanly distinguish clicks, selected wire drags, and OrbitControls drags
+    // Pointer interaction: cleanly distinguish clicks, selected wire/marker drags, and OrbitControls drags
     let downX = 0;
     let downY = 0;
     let downButton = -1;
@@ -1255,43 +1391,71 @@ export const StageViewport: React.FC<StageViewportProps> = ({
       downY = e.clientY;
       downButton = e.button;
 
-      if (propsRef.current.toolMode === 'orbit' && e.button === 0 && selectedWireMeshes.length > 0) {
+      if (propsRef.current.toolMode === 'orbit' && e.button === 0 && selectedDragMeshes.length > 0) {
         const rect = renderer.domElement.getBoundingClientRect();
         if (rect.width > 0 && rect.height > 0) {
           pointerNdc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
           pointerNdc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
           raycaster.setFromCamera(pointerNdc, camera);
-          const hits = raycaster.intersectObjects(selectedWireMeshes, false);
+          const hits = raycaster.intersectObjects(selectedDragMeshes, false);
           if (hits.length > 0) {
             const hitObj = hits[0].object;
-            const wireId = hitObj.userData.itemId as string | undefined;
-            const wire = wireId ? propsRef.current.wires.find((w) => w.id === wireId) : undefined;
-            if (wire) {
-              const vertexIdx = hitObj.userData.wireVertexIndex as number | undefined;
-              const anchorSnap = computeSnapPoint(e.clientX, e.clientY, wire.id, hits[0].point.y);
-              if (anchorSnap) {
-                const originalPoints = wire.points.map((pt): Vec3Tuple => [pt[0], pt[1], pt[2]]);
-                dragState =
-                  vertexIdx !== undefined
-                    ? {
-                        kind: 'vertex',
-                        wireId: wire.id,
-                        vertexIndex: vertexIdx,
-                        originalPoints,
-                        latestPoints: originalPoints,
-                      }
-                    : {
-                        kind: 'wire',
-                        wireId: wire.id,
-                        startPoint: anchorSnap.point,
-                        originalPoints,
-                        latestPoints: originalPoints,
-                      };
-                controls.enabled = false;
-                hoverState = anchorSnap;
-                lastPointerPx = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-                syncCursorStyle();
-                rebuildPreview();
+            const itemId = hitObj.userData.itemId as string | undefined;
+            const itemKind = hitObj.userData.itemKind as 'wire' | 'marker' | undefined;
+
+            if (itemKind === 'marker' && itemId) {
+              const mk = propsRef.current.markers.find((m) => m.id === itemId);
+              if (mk) {
+                const isCenterHandle = Boolean(hitObj.userData.markerCenterHandle);
+                const anchorSnap = computeSnapPoint(e.clientX, e.clientY, mk.id, mk.center[1]);
+                if (anchorSnap) {
+                  const originalCenter: Vec3Tuple = [mk.center[0], mk.center[1], mk.center[2]];
+                  dragState = {
+                    kind: 'marker',
+                    markerId: mk.id,
+                    startPoint: anchorSnap.point,
+                    originalCenter,
+                    latestCenter: originalCenter,
+                    snapCenterDirectly: isCenterHandle,
+                    radiusFt: mk.radiusFt,
+                    heightFt: mk.heightFt ?? 0,
+                  };
+                  controls.enabled = false;
+                  hoverState = anchorSnap;
+                  lastPointerPx = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+                  syncCursorStyle();
+                  rebuildPreview();
+                }
+              }
+            } else if (itemId) {
+              const wire = propsRef.current.wires.find((w) => w.id === itemId);
+              if (wire) {
+                const vertexIdx = hitObj.userData.wireVertexIndex as number | undefined;
+                const anchorSnap = computeSnapPoint(e.clientX, e.clientY, wire.id, hits[0].point.y);
+                if (anchorSnap) {
+                  const originalPoints = wire.points.map((pt): Vec3Tuple => [pt[0], pt[1], pt[2]]);
+                  dragState =
+                    vertexIdx !== undefined
+                      ? {
+                          kind: 'vertex',
+                          wireId: wire.id,
+                          vertexIndex: vertexIdx,
+                          originalPoints,
+                          latestPoints: originalPoints,
+                        }
+                      : {
+                          kind: 'wire',
+                          wireId: wire.id,
+                          startPoint: anchorSnap.point,
+                          originalPoints,
+                          latestPoints: originalPoints,
+                        };
+                  controls.enabled = false;
+                  hoverState = anchorSnap;
+                  lastPointerPx = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+                  syncCursorStyle();
+                  rebuildPreview();
+                }
               }
             }
           }
@@ -1307,6 +1471,23 @@ export const StageViewport: React.FC<StageViewportProps> = ({
       if (dragState) {
         if (now - lastMoveCheck < 24) return;
         lastMoveCheck = now;
+
+        if (dragState.kind === 'marker') {
+          const snap = computeSnapPoint(
+            e.clientX,
+            e.clientY,
+            dragState.markerId,
+            dragState.originalCenter[1],
+          );
+          if (snap) {
+            const nextCenter = computeMovedMarkerCenter(dragState, snap);
+            dragState.latestCenter = nextCenter;
+            hoverState = snap;
+            propsRef.current.onUpdateMarkerCenter(dragState.markerId, nextCenter);
+            rebuildPreview();
+          }
+          return;
+        }
 
         const fallbackY =
           dragState.kind === 'wire'
@@ -1335,10 +1516,11 @@ export const StageViewport: React.FC<StageViewportProps> = ({
           pointerNdc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
           raycaster.setFromCamera(pointerNdc, camera);
           const selHits =
-            selectedWireMeshes.length > 0 ? raycaster.intersectObjects(selectedWireMeshes, false) : [];
+            selectedDragMeshes.length > 0 ? raycaster.intersectObjects(selectedDragMeshes, false) : [];
           if (selHits.length > 0) {
+            const hitData = selHits[0].object.userData;
             orbitHoverCursor =
-              selHits[0].object.userData.wireVertexIndex !== undefined ? 'grab' : 'move';
+              hitData.wireVertexIndex !== undefined || hitData.markerCenterHandle ? 'grab' : 'move';
           } else {
             const hits = raycaster.intersectObjects(clickableLineObjects, false);
             orbitHoverCursor = hits.length > 0 ? 'pointer' : 'grab';
@@ -1356,18 +1538,32 @@ export const StageViewport: React.FC<StageViewportProps> = ({
       rebuildPreview();
     };
 
-    const finishWireDrag = (clientX?: number, clientY?: number) => {
+    const finishItemDrag = (clientX?: number, clientY?: number) => {
       if (!dragState) return;
       if (clientX !== undefined && clientY !== undefined) {
-        const fallbackY =
-          dragState.kind === 'wire'
-            ? dragState.startPoint[1]
-            : (dragState.originalPoints[dragState.vertexIndex]?.[1] ?? 0);
-        const snap = computeSnapPoint(clientX, clientY, dragState.wireId, fallbackY);
-        if (snap) {
-          const finalPts = computeMovedPoints(dragState, snap);
-          dragState.latestPoints = finalPts;
-          propsRef.current.onUpdateWirePoints(dragState.wireId, finalPts);
+        if (dragState.kind === 'marker') {
+          const snap = computeSnapPoint(
+            clientX,
+            clientY,
+            dragState.markerId,
+            dragState.originalCenter[1],
+          );
+          if (snap) {
+            const finalCenter = computeMovedMarkerCenter(dragState, snap);
+            dragState.latestCenter = finalCenter;
+            propsRef.current.onUpdateMarkerCenter(dragState.markerId, finalCenter);
+          }
+        } else {
+          const fallbackY =
+            dragState.kind === 'wire'
+              ? dragState.startPoint[1]
+              : (dragState.originalPoints[dragState.vertexIndex]?.[1] ?? 0);
+          const snap = computeSnapPoint(clientX, clientY, dragState.wireId, fallbackY);
+          if (snap) {
+            const finalPts = computeMovedPoints(dragState, snap);
+            dragState.latestPoints = finalPts;
+            propsRef.current.onUpdateWirePoints(dragState.wireId, finalPts);
+          }
         }
       }
       dragState = null;
@@ -1379,7 +1575,7 @@ export const StageViewport: React.FC<StageViewportProps> = ({
 
     const handlePointerUp = (e: PointerEvent) => {
       if (dragState) {
-        finishWireDrag(e.clientX, e.clientY);
+        finishItemDrag(e.clientX, e.clientY);
         return;
       }
 
@@ -1441,13 +1637,13 @@ export const StageViewport: React.FC<StageViewportProps> = ({
 
     const handleWindowPointerUp = (e: PointerEvent) => {
       if (dragState) {
-        finishWireDrag(e.clientX, e.clientY);
+        finishItemDrag(e.clientX, e.clientY);
       }
     };
 
     const handleWindowPointerCancel = () => {
       if (dragState) {
-        finishWireDrag();
+        finishItemDrag();
       }
     };
 
@@ -1567,7 +1763,7 @@ export const StageViewport: React.FC<StageViewportProps> = ({
 
   useEffect(() => {
     engineRef.current?.rebuildPreview();
-  }, [toolMode, activeColor, draftPoints, measureStart, circleStart]);
+  }, [toolMode, activeColor, defaultMarkerHeightFt, draftPoints, measureStart, circleStart]);
 
   useEffect(() => {
     engineRef.current?.updateFloorVisibility();

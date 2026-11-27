@@ -47,6 +47,7 @@ interface ControlDockProps {
   showStageDims: boolean;
   showFloorGrid: boolean;
   selectedItemId: string | null;
+  defaultMarkerHeightFt: number;
   draftPoints: Vec3Tuple[];
   measureStart: Vec3Tuple | null;
   circleStart: Vec3Tuple | null;
@@ -54,6 +55,7 @@ interface ControlDockProps {
   onSetToolMode: (mode: ToolMode) => void;
   onSetSnapMode: (mode: SnapMode) => void;
   onSetActiveColor: (hex: string) => void;
+  onSetDefaultMarkerHeightFt: (heightFt: number) => void;
   onSetViewMode: (mode: ViewMode) => void;
   onToggleStageDims: () => void;
   onToggleFloorGrid: () => void;
@@ -86,6 +88,7 @@ export const ControlDock: React.FC<ControlDockProps> = ({
   showStageDims,
   showFloorGrid,
   selectedItemId,
+  defaultMarkerHeightFt,
   draftPoints,
   measureStart,
   circleStart,
@@ -93,6 +96,7 @@ export const ControlDock: React.FC<ControlDockProps> = ({
   onSetToolMode,
   onSetSnapMode,
   onSetActiveColor,
+  onSetDefaultMarkerHeightFt,
   onSetViewMode,
   onToggleStageDims,
   onToggleFloorGrid,
@@ -359,14 +363,26 @@ export const ControlDock: React.FC<ControlDockProps> = ({
               </div>
             )}
 
+            {toolMode === 'circle' && (
+              <div className="rounded-md border border-slate-800 bg-[#0b0f14] p-2">
+                <ImperialInput
+                  label="Height (0' 0&quot; = Flat Circle, > 0 = Cylinder)"
+                  valueFeet={defaultMarkerHeightFt}
+                  minFeet={0}
+                  maxFeet={20}
+                  onChange={onSetDefaultMarkerHeightFt}
+                />
+              </div>
+            )}
+
             <p className="text-[11px] text-slate-500 leading-snug">
               {toolMode === 'orbit'
-                ? 'Drag empty space to orbit · Click a wire to select, then drag cable to move or drag joints to reshape.'
+                ? 'Drag empty space to orbit · Click a wire or circle to select, then drag to move it on stage.'
                 : toolMode === 'wire'
                   ? 'Click stage points to route wire. Double-click or Enter to finish. Drag still orbits.'
                   : toolMode === 'measure'
                     ? 'Click Point A then Point B to place a dimension line. Drag still orbits.'
-                    : 'Click center on stage, then move & click outer edge to mark a singer or instrument.'}
+                    : 'Click center on stage, then move & click outer edge to mark a singer, instrument, or cylinder.'}
             </p>
           </div>
 
@@ -752,6 +768,8 @@ export const ControlDock: React.FC<ControlDockProps> = ({
                   <div className="flex flex-col gap-1.5">
                     {markers.map((mk) => {
                       const selected = selectedItemId === mk.id;
+                      const heightFt = mk.heightFt ?? 0;
+                      const isCylinder = heightFt > 0.02;
                       return (
                         <div
                           key={mk.id}
@@ -790,7 +808,9 @@ export const ControlDock: React.FC<ControlDockProps> = ({
 
                           <div className="flex items-center justify-between text-[11px]">
                             <span className="font-mono-tabular text-slate-300">
-                              Circle · Ø {formatFeetInches(mk.radiusFt * 2)} (R {formatFeetInches(mk.radiusFt)})
+                              {isCylinder
+                                ? `Cylinder · Ø ${formatFeetInches(mk.radiusFt * 2)} · H ${formatFeetInches(heightFt)}`
+                                : `Circle · Ø ${formatFeetInches(mk.radiusFt * 2)} (R ${formatFeetInches(mk.radiusFt)})`}
                             </span>
                             <div className="flex items-center gap-2">
                               <button
@@ -800,7 +820,7 @@ export const ControlDock: React.FC<ControlDockProps> = ({
                                   onUpdateMarker(mk.id, { visible: !mk.visible });
                                 }}
                                 className="text-slate-400 hover:text-white cursor-pointer"
-                                title={mk.visible ? 'Hide circle' : 'Show circle'}
+                                title={mk.visible ? 'Hide marker' : 'Show marker'}
                               >
                                 {mk.visible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
                               </button>
@@ -811,7 +831,7 @@ export const ControlDock: React.FC<ControlDockProps> = ({
                                   onDeleteMarker(mk.id);
                                 }}
                                 className="text-slate-400 hover:text-rose-400 cursor-pointer"
-                                title="Delete circle"
+                                title="Delete marker"
                               >
                                 <Trash2 className="h-3.5 w-3.5" />
                               </button>
@@ -819,14 +839,31 @@ export const ControlDock: React.FC<ControlDockProps> = ({
                           </div>
 
                           {selected && (
-                            <div className="pt-1 border-t border-slate-800/80" onClick={(e) => e.stopPropagation()}>
-                              <ImperialInput
-                                label="Circle Radius"
-                                valueFeet={mk.radiusFt}
-                                minFeet={0.5}
-                                maxFeet={15}
-                                onChange={(radiusFt) => onUpdateMarker(mk.id, { radiusFt })}
-                              />
+                            <div
+                              className="flex flex-col gap-2 pt-1.5 border-t border-slate-800/80"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <div className="grid grid-cols-2 gap-2">
+                                <ImperialInput
+                                  label="Radius"
+                                  valueFeet={mk.radiusFt}
+                                  minFeet={0.5}
+                                  maxFeet={15}
+                                  onChange={(radiusFt) => onUpdateMarker(mk.id, { radiusFt })}
+                                />
+                                <ImperialInput
+                                  label="Height (0 = Flat)"
+                                  valueFeet={heightFt}
+                                  minFeet={0}
+                                  maxFeet={20}
+                                  onChange={(nextH) =>
+                                    onUpdateMarker(mk.id, { heightFt: nextH > 0.02 ? nextH : 0 })
+                                  }
+                                />
+                              </div>
+                              <p className="text-[11px] text-sky-300/90 leading-snug">
+                                Selected on stage — drag circle/cylinder to move, or drag center ring to snap center.
+                              </p>
                             </div>
                           )}
                         </div>

@@ -49,6 +49,7 @@ export interface StageMarker {
   color: string;
   center: Vec3Tuple;
   radiusFt: number;
+  heightFt?: number;
   visible: boolean;
 }
 
